@@ -1,0 +1,196 @@
+%% 0) 모델 로드 + 공통 파라미터 세팅
+import com.comsol.model.*
+import com.comsol.model.util.*
+
+ModelUtil.showProgress(true);
+
+filepath = 'G:\공유 드라이브\Battery Software Group (2025)\Members\최은식\COMSOL';
+filename = 'ES_PCCV_model.mph';   % <<== 실제 mph 이름으로 바꿔줘
+full_path = fullfile(filepath, filename);
+assert(isfile(full_path), 'mph 파일 없음: %s', full_path);
+
+model = mphload(full_path);
+
+% --- 여기서 네가 말한 인풋들 세팅 ---
+model.param.set('pulse_freq',                       '200[s]');
+model.param.set('duty_cycle',                       '0.5');       % 50[%]이면 0.5로 가정
+model.param.set('pulse_rest_current_param_coeffi',  '-1');
+model.param.set('C_rate',                           '1');         % 1C
+model.param.set('T0',                               '25[degC]');
+model.param.set('no_cycles',                        '0');
+model.param.set('k0_SEI_co',                        '1');
+model.param.set('Li_plating_co',                    '1');
+
+% 시간 설정 (예: 0~4000 s, 1초 간격)
+t_end   = 4000;
+dt_out  = 10;
+tlist_str = sprintf('range(0,%g,%g)', dt_out, t_end);
+
+%% 1) CCCV (std1, dset1) 실행
+studyTag_cccv = 'std1';
+dset_cccv     = 'dset1';
+
+set_tlist_safe(model, studyTag_cccv, tlist_str);
+model.study(studyTag_cccv).run();
+
+expr = {'t', ...
+        'E_cell', ...              % V
+        'liion.cdc1.Icell', ...    % I
+        'liion.Ect', ...           % anode potential
+        'T_avg', ...               % volume-avg T
+        'SEI_capacity', ...        % 네가 저장해둔 변수 이름
+        'plating_cap'};            % 네가 저장해둔 변수 이름
+
+D_cccv = mpheval(model, expr, ...
+                 'dataset', dset_cccv, ...
+                 'edim', 'point', 'selection', 2, ...
+                 'solnum', 'all');
+
+t_cccv   = D_cccv.d1;
+E_cccv   = D_cccv.d2;
+I_cccv   = D_cccv.d3;
+phi_cccv = D_cccv.d4;
+T_cccv   = D_cccv.d5;
+sei_cccv = D_cccv.d6;
+pc_cccv  = D_cccv.d7;
+
+T_cccv_C = T_cccv - 273.15;             % [°C]
+remain_cccv = 1 - sei_cccv - pc_cccv;   % 1 - SEI - plating
+
+%% 2) PCCV (Pulse-CCV, std3, dset37) 실행
+studyTag_pccv = 'std3';
+dset_pccv     = 'dset37';
+
+set_tlist_safe(model, studyTag_pccv, tlist_str);
+model.study(studyTag_pccv).run();
+
+D_pccv = mpheval(model, expr, ...
+                 'dataset', dset_pccv, ...
+                 'edim', 'point', 'selection', 2, ...
+                 'solnum', 'all');
+
+t_pccv   = D_pccv.d1;
+E_pccv   = D_pccv.d2;
+I_pccv   = D_pccv.d3;
+phi_pccv = D_pccv.d4;
+T_pccv   = D_pccv.d5;
+sei_pccv = D_pccv.d6;
+pc_pccv  = D_pccv.d7;
+
+T_pccv_C = T_pccv - 273.15;
+remain_pccv = 1 - sei_pccv - pc_pccv;
+
+%% 3) pulse_Crate, pulse_amp 값 확인
+vals = mphglobal(model, {'pulse_Crate','pulse_amp'}, 'dataset', dset_pccv);
+pulse_Crate_val = vals(1);
+pulse_amp_val   = vals(2);
+
+fprintf('\n[PCCV] pulse_Crate = %g, pulse_amp = %g\n', ...
+        pulse_Crate_val, pulse_amp_val);
+
+%% 4) 색상 팔레트
+colV    = [239,192,0]/255;    % V (노랑)
+colI    = [77,187,213]/255;   % I (시안)
+colTavg = [0,115,194]/255;    % T_avg (파랑)
+colAn   = [146,94,159]/255;   % anode potential (보라)
+colSEI  = [32,133,78]/255;    % SEI (초록)
+colPc   = [205,83,76]/255;    % plating (빨강)
+colRem  = [0.3 0.3 0.3];      % 1-SEI-plating (회색)
+
+ls_cccv = '-';    % CCCV 실선
+ls_pccv = '--';   % PCCV 점선
+
+%% 5-1) Voltage & Current vs time
+figure; set(gcf,'Color','w'); hold on; grid off;
+title('CCCV vs PCCV — Voltage & Current');
+
+yyaxis left;
+plot(t_cccv, E_cccv, ls_cccv, 'Color', colV, 'LineWidth',1.5);
+plot(t_pccv, E_pccv, ls_pccv, 'Color', colV, 'LineWidth',1.5);
+ylabel('E_{cell} (V)');
+
+yyaxis right;
+plot(t_cccv, I_cccv, ls_cccv, 'Color', colI, 'LineWidth',1.2);
+plot(t_pccv, I_pccv, ls_pccv, 'Color', colI, 'LineWidth',1.2);
+ylabel('I_{cell} (A)');
+
+xlabel('t (s)');
+legend({'CCCV V','PCCV V','CCCV I','PCCV I'}, 'Location','best');
+
+%% 5-2) T_{avg} vs time
+figure; set(gcf,'Color','w'); hold on; grid off;
+title('CCCV vs PCCV — T_{avg}');
+
+plot(t_cccv, T_cccv_C, ls_cccv, 'Color', colTavg, 'LineWidth',1.6);
+plot(t_pccv, T_pccv_C, ls_pccv, 'Color', colTavg, 'LineWidth',1.6);
+
+xlabel('t (s)');
+ylabel('T_{avg} (^{\circ}C)');
+legend({'CCCV','PCCV'}, 'Location','best');
+
+%% 5-3) Anode potential vs time
+figure; set(gcf,'Color','w'); hold on; grid off;
+title('CCCV vs PCCV — Anode potential');
+
+plot(t_cccv, phi_cccv, ls_cccv, 'Color', colAn, 'LineWidth',1.6);
+plot(t_pccv, phi_pccv, ls_pccv, 'Color', colAn, 'LineWidth',1.6);
+
+xlabel('t (s)');
+ylabel('Anode potential (V)');
+legend({'CCCV','PCCV'}, 'Location','best');
+
+%% 5-4) SEI capacity vs time
+figure; set(gcf,'Color','w'); hold on; grid off;
+title('CCCV vs PCCV — SEI capacity');
+
+plot(t_cccv, sei_cccv, ls_cccv, 'Color', colSEI, 'LineWidth',1.6);
+plot(t_pccv, sei_pccv, ls_pccv, 'Color', colSEI, 'LineWidth',1.6);
+
+xlabel('t (s)');
+ylabel('SEI\_capacity');
+legend({'CCCV','PCCV'}, 'Location','best');
+
+%% 5-5) Plating capacity vs time
+figure; set(gcf,'Color','w'); hold on; grid off;
+title('CCCV vs PCCV — Plating capacity');
+
+plot(t_cccv, pc_cccv, ls_cccv, 'Color', colPc, 'LineWidth',1.6);
+plot(t_pccv, pc_pccv, ls_pccv, 'Color', colPc, 'LineWidth',1.6);
+
+xlabel('t (s)');
+ylabel('plating\_cap');
+legend({'CCCV','PCCV'}, 'Location','best');
+
+%% 5-6) 1 - SEI - plating vs time
+figure; set(gcf,'Color','w'); hold on; grid off;
+title('CCCV vs PCCV — 1 - SEI\_capacity - plating\_cap');
+
+plot(t_cccv, remain_cccv, ls_cccv, 'Color', colRem, 'LineWidth',1.6);
+plot(t_pccv, remain_pccv, ls_pccv, 'Color', colRem, 'LineWidth',1.6);
+
+xlabel('t (s)');
+ylabel('1 - SEI\_capacity - plating\_cap');
+legend({'CCCV','PCCV'}, 'Location','best');
+
+function set_tlist_safe(model, studyTag, tlist_str)
+    tried = false;
+    for cand = {'time','time1','time2','step1','step2'}
+        try
+            model.study(studyTag).feature(char(cand)).set('tlist', tlist_str);
+            tried = true;
+            break;
+        catch
+        end
+    end
+    for solCand = {'sol1','sol2'}
+        for featCand = {'t1','t2','time','time1'}
+            try
+                model.sol(char(solCand)).feature(char(featCand)).set('tlist', tlist_str);
+            catch
+            end
+        end
+    end
+    if ~tried
+        warning('tlist 설정 실패: study=%s (기본 설정으로 계속 진행)', studyTag);
+    end
+end
