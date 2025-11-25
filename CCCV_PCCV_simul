@@ -5,7 +5,7 @@ import com.comsol.model.util.*
 ModelUtil.showProgress(true);
 
 filepath = 'G:\공유 드라이브\Battery Software Group (2025)\Members\최은식\COMSOL';
-filename = 'ES_PCCV_model.mph';   % <<== 실제 mph 이름으로 바꿔줘
+filename = 'PC_GIST_Final.mph';   % <<== 실제 mph 이름으로 변경
 full_path = fullfile(filepath, filename);
 assert(isfile(full_path), 'mph 파일 없음: %s', full_path);
 
@@ -14,21 +14,24 @@ model = mphload(full_path);
 % --- 여기서 네가 말한 인풋들 세팅 ---
 model.param.set('pulse_freq',                       '200[s]');
 model.param.set('duty_cycle',                       '0.5');       % 50[%]이면 0.5로 가정
-model.param.set('pulse_rest_current_param_coeffi',  '-1');
+model.param.set('pulse_rest_current_param_coeffi',  '-1');        % rest 때 전류 크기(Crate 으로 조절) , 역펄스, 정펄스 , 휴지때 0 다 Control 가능
 model.param.set('C_rate',                           '1');         % 1C
-model.param.set('T0',                               '25[degC]');
-model.param.set('no_cycles',                        '0');
-model.param.set('k0_SEI_co',                        '1');
-model.param.set('Li_plating_co',                    '1');
-
+model.param.set('T0',                               '25[degC]');  % 온도 조절 
+model.param.set('no_cycles',                        '0');         % 사이클은 0이 처음 횟수로 포함. 0으로 두면 1번 돌아감  
+model.param.set('k0_SEI_co',                        '1');         % SEI 양을 조절함. 
+model.param.set('Li_plating_co',                    '1');         % plating 양을 조절함 
+model.param.set('stoic_coeffi',                      '1'); % 리튬 이온 소모 계수, cycling 을 돌릴때 COMSOL 예제에서 소모 계수 * 사이클 횟수, 
+                                                           % 예를 들어서 250(stoic_ceoffi) *4 (cycle 횟수) 로 1000 번째 사이클과 비슷하다는 식으로 설정함,
+                                                           % 이 값을 너무 올리면 수렴 불안정성이 커져서 낮은 값을 추천, (Max 100)
 % 시간 설정 (예: 0~4000 s, 1초 간격)
-t_end   = 4000;
+
+t_finish = 30000;
 dt_out  = 10;
-tlist_str = sprintf('range(0,%g,%g)', dt_out, t_end);
+tlist_str = sprintf('range(0,%g,%g)', dt_out, t_finish);
 
 %% 1) CCCV (std1, dset1) 실행
 studyTag_cccv = 'std1';
-dset_cccv     = 'dset1';
+dset_cccv     = 'dset1';        % 이 데이터셋과 study 로 진행해야 CCCV 로 돌아감. 
 
 set_tlist_safe(model, studyTag_cccv, tlist_str);
 model.study(studyTag_cccv).run();
@@ -59,7 +62,7 @@ remain_cccv = 1 - sei_cccv - pc_cccv;   % 1 - SEI - plating
 
 %% 2) PCCV (Pulse-CCV, std3, dset37) 실행
 studyTag_pccv = 'std3';
-dset_pccv     = 'dset37';
+dset_pccv     = 'dset37';            % 이 데이터셋과 study 로 이용해야 PCCV 로 진행이 됨. 
 
 set_tlist_safe(model, studyTag_pccv, tlist_str);
 model.study(studyTag_pccv).run();
@@ -105,11 +108,15 @@ figure; set(gcf,'Color','w'); hold on; grid off;
 title('CCCV vs PCCV — Voltage & Current');
 
 yyaxis left;
+yyaxis left
+ax = gca;
+ax.YColor = 'k';
 plot(t_cccv, E_cccv, ls_cccv, 'Color', colV, 'LineWidth',1.5);
 plot(t_pccv, E_pccv, ls_pccv, 'Color', colV, 'LineWidth',1.5);
 ylabel('E_{cell} (V)');
 
 yyaxis right;
+ax.YColor = 'k';
 plot(t_cccv, I_cccv, ls_cccv, 'Color', colI, 'LineWidth',1.2);
 plot(t_pccv, I_pccv, ls_pccv, 'Color', colI, 'LineWidth',1.2);
 ylabel('I_{cell} (A)');
